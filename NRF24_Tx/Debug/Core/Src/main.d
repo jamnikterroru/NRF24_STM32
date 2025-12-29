@@ -25,9 +25,8 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim.h \
  ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim_ex.h \
  ../Core/Inc/spi.h ../Core/Inc/main.h ../Core/Inc/tim.h \
- ../Core/Inc/gpio.h ../Core/Inc/ds18b20.h ../Core/Inc/ow.h \
- ../Core/Inc/tim.h ../Core/Inc/ow_config.h ../Core/Inc/NRF24.h \
- ../Core/Inc/NRF24_reg_addresses.h
+ ../Core/Inc/gpio.h ../Core/Inc/NRF24.h ../Core/Inc/NRF24_reg_addresses.h \
+ ../Core/Inc/ds18b20.h ../Core/Inc/onewire.h ../Core/Inc/gpio.h
 ../Core/Inc/main.h:
 ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal.h:
 ../Core/Inc/stm32f1xx_hal_conf.h:
@@ -58,9 +57,8 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 ../Core/Inc/main.h:
 ../Core/Inc/tim.h:
 ../Core/Inc/gpio.h:
-../Core/Inc/ds18b20.h:
-../Core/Inc/ow.h:
-../Core/Inc/tim.h:
-../Core/Inc/ow_config.h:
 ../Core/Inc/NRF24.h:
 ../Core/Inc/NRF24_reg_addresses.h:
+../Core/Inc/ds18b20.h:
+../Core/Inc/onewire.h:
+../Core/Inc/gpio.h:

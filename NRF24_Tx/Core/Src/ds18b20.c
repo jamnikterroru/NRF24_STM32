@@ -1,321 +1,294 @@
-
 /*
- * @file        ds18b20.c
- * @brief       OneWire communication driver
- * @author      Nima Askari
- * @version     2.0.0
- * @license     See the LICENSE file in the root folder.
+ * ds18b20.c
  *
- * @note        All my libraries are dual-licensed. 
- *              Please review the licensing terms before using them.
- *              For any inquiries, feel free to contact me.
+ *	The MIT License.
+ *  Created on: 20.09.2018
+ *      Author: Mateusz Salamon
+ *      www.msalamon.pl
+ *      mateusz@msalamon.pl
  *
- * @github      https://www.github.com/nimaltd
- * @linkedin    https://www.linkedin.com/in/nimaltd
- * @youtube     https://www.youtube.com/@nimaltd
- * @instagram   https://instagram.com/github.nimaltd
- *
- * Copyright (C) 2025 Nima Askari - NimaLTD. All rights reserved.
  */
-
-/*************************************************************************************************/
-/** Includes **/
-/*************************************************************************************************/
-
 #include "ds18b20.h"
 
-/*************************************************************************************************/
-/** Function Implementations **/
-/*************************************************************************************************/
+//
+//	VARIABLES
+//
+Ds18b20Sensor_t	ds18b20[_DS18B20_MAX_SENSORS];
 
-/*************************************************************************************************/
-/**
- * @brief Initialize ds18b20 handle with one-wire configuration.
- * @param[in] handle: Pointer to the ds18b20 handle to initialize.
- * @param[in] init: Pointer to initialization data (GPIO, pin, timer, callback).
- * @retval None
- */
-void ds18b20_init(ds18b20_t *handle, ow_init_t *init)
+OneWire_t OneWire;
+uint8_t	OneWireDevices;
+uint8_t TempSensorCount=0;
+
+//
+//	FUNCTIONS
+//
+
+//
+//	Start conversion of @number sensor
+//
+uint8_t DS18B20_Start(uint8_t number)
 {
-  assert_param(handle != NULL);
-  assert_param(init != NULL);
+	if( number >= TempSensorCount) // If read sensor is not availible
+		return 0;
 
-  /* Set Default value after power-up */
-  handle->cnv_time = DS18B20_CNV_TIM_12;
+	if (!DS18B20_Is((uint8_t*)&ds18b20[number].Address)) // Check if sensor is DS18B20 family
+		return 0;
 
-  /* Initialize one-wire */
-  ow_init(&handle->ow, init);
+	OneWire_Reset(&OneWire); // Reset the bus
+	OneWire_SelectWithPointer(&OneWire, (uint8_t*)ds18b20[number].Address); // Select the sensor by ROM
+	OneWire_WriteByte(&OneWire, DS18B20_CMD_CONVERTTEMP); // Convert command
+	
+	return 1;
 }
 
-/*************************************************************************************************/
-/**
- * @brief Check if ds18b20 bus is busy.
- * @param[in] handle: Pointer to the ds18b20 handle.
- * @retval true if busy, false if idle
- */
-__INLINE bool ds18b20_is_busy(ds18b20_t *handle)
+//
+//	Start conversion on all sensors
+//
+void DS18B20_StartAll()
 {
-  assert_param(handle != NULL);
-  return ow_is_busy(&handle->ow);
+	OneWire_Reset(&OneWire); // Reset the bus
+	OneWire_WriteByte(&OneWire, ONEWIRE_CMD_SKIPROM); // Skip ROM command
+	OneWire_WriteByte(&OneWire, DS18B20_CMD_CONVERTTEMP); // Start conversion on all sensors
 }
 
-/*************************************************************************************************/
-/**
- * @brief Get the last ds18b20 error.
- * @param[in] handle: Pointer to the ds18b20 handle.
- * @retval Last error code (ow_err_t)
- */
-__INLINE ow_err_t ds18b20_last_error(ds18b20_t *handle)
+//
+//	Read one sensor
+//
+uint8_t DS18B20_Read(uint8_t number, float *destination)
 {
-  assert_param(handle != NULL);
-  return ow_last_error(&handle->ow);
-}
+	if( number >= TempSensorCount) // If read sensor is not availible
+		return 0;
 
-/*************************************************************************************************/
-/**
- * @brief Start search to update all ROM IDs on the 1-Wire bus.
- * @param[in] handle: Pointer to the ds18b20 handle.
- * @retval Last error code (ow_err_t)
- */
-__INLINE ow_err_t ds18b20_update_rom_id(ds18b20_t *handle)
-{
-  assert_param(handle != NULL);
-  return ow_update_rom_id(&handle->ow);
-}
+	uint16_t temperature;
+	uint8_t resolution;
+	float result;
+	uint8_t i = 0;
+	uint8_t data[DS18B20_DATA_LEN];
+#ifdef _DS18B20_USE_CRC
+	uint8_t crc;
 
-/*************************************************************************************************/
-/**
- * @brief Send Start Conversation to All Devices.
- * @param[in] handle: Pointer to the ds18b20 handle.
- * @retval Last error code (ow_err_t)
- */
-ow_err_t ds18b20_cnv(ds18b20_t *handle)
-{
-  assert_param(handle != NULL);
-
-  /* Save Start time */
-  handle->time = HAL_GetTick();
-
-  /* Send Command */
-  return ow_xfer(&handle->ow, DS18B20_CMD_CONV, NULL, 0, 0);
-}
-
-/*************************************************************************************************/
-/**
- * @brief Set new configuration.
- * @param[in] handle: Pointer to the ds18b20 handle.
- * @param[in] config: Pointer to New configuration.
- * @retval Last error code (ow_err_t)
- */
-ow_err_t ds18b20_conf(ds18b20_t *handle, ds18b20_config_t *config)
-{
-  uint8_t w_data[3];
-  /* base config for 12-bit */
-  uint8_t conf_reg = 0x7F;
-
-  assert_param(handle != NULL);
-  assert_param(config != NULL);
-
-  switch (config->cnv_bit)
-  {
-    case DS18B20_CNV_BIT_9:
-      conf_reg = 0x1F;
-      handle->cnv_time = DS18B20_CNV_TIM_9;
-      break;
-    case DS18B20_CNV_BIT_10:
-      conf_reg = 0x3F;
-      handle->cnv_time = DS18B20_CNV_TIM_10;
-      break;
-    case DS18B20_CNV_BIT_11:
-      conf_reg = 0x5F;
-      handle->cnv_time = DS18B20_CNV_TIM_11;
-      break;
-    default:
-      conf_reg = 0x7F;
-      handle->cnv_time = DS18B20_CNV_TIM_12;
-      break;
-  }
-
-  /* Write data: TH, TL, config register */
-  if (config->alarm_high > 125)
-  {
-    config->alarm_high = 125;
-  }
-  if (config->alarm_high < -55)
-  {
-    config->alarm_high = -55;
-  }
-  if (config->alarm_low > 125)
-  {
-    config->alarm_low = 125;
-  }
-  if (config->alarm_low < -55)
-  {
-    config->alarm_low = -55;
-  }
-  w_data[0] = config->alarm_high;
-  w_data[1] = config->alarm_low;
-  w_data[2] = conf_reg;
-
-  /* Send command over 1-Wire: Skip ROM + Write Scratchpad */
-  return ow_xfer(&handle->ow, DS18B20_CMD_CONF, w_data, 3, 0);
-}
-
-/*************************************************************************************************/
-/**
- * @brief Check if ds18b20 conversation is done.
- * @param[in] handle: Pointer to the ds18b20 handle.
- * @retval True if Ready, otherwise false.
- */
-bool ds18b20_is_cnv_done(ds18b20_t *handle)
-{
-  assert_param(handle != NULL);
-
-  return ((HAL_GetTick() - handle->time >= handle->cnv_time) ? true : false);
-}
-
-#if (OW_MAX_DEVICE == 1)
-/*************************************************************************************************/
-/**
- * @brief Send read temperature request.
- * @param[in] handle: Pointer to the ds18b20 handle.
- * @retval Last error code (ow_err_t)
- */
-ow_err_t ds18b20_req_read(ds18b20_t *handle)
-{
-  assert_param(handle != NULL);
-
-  /* Send Read Command */
-  return ow_xfer(&handle->ow, DS18B20_CMD_READ, NULL, 0, 9);
-}
-#else
-/*************************************************************************************************/
-/**
- * @brief Send read temperature request.
- * @param[in] handle: Pointer to the ds18b20 handle.
- * @param[in] rom_id: Selected ROM ID index.
- * @retval Last error code (ow_err_t)
- */
-ow_err_t ds18b20_req_read(ds18b20_t *handle, uint8_t rom_id)
-{
-  assert_param(handle != NULL);
-
-  /* Send Read Command */
-  return ow_xfer_by_id(&handle->ow, rom_id, DS18B20_CMD_READ, NULL, 0, 9);
-}
 #endif
 
-/*************************************************************************************************/
-/**
- * @brief Read temperature from buffer.
- * @param[in] handle: Pointer to the ds18b20 handle.
- * @retval retval Temperature in Celsius * 100 (e.g. 1025 = 10.25°C), return DS18B20_ERROR if error
- */
-int16_t ds18b20_read_c(ds18b20_t *handle)
-{
-  uint8_t r_data[9];
-  uint16_t raw;
-  int32_t temp_x100 = DS18B20_ERROR;   // use 32-bit for intermediate math
-  int8_t sign = 1;
-  uint8_t resolution;
+	
+	if (!DS18B20_Is((uint8_t*)&ds18b20[number].Address)) // Check if sensor is DS18B20 family
+		return 0;
 
-  assert_param(handle != NULL);
+	if (!OneWire_ReadBit(&OneWire)) // Check if the bus is released
+		return 0; // Busy bus - conversion is not finished
 
-  do
-  {
-    /* Check received data length */
-    if (ow_read_resp(&handle->ow, r_data, sizeof(r_data)) != sizeof(r_data))
-    {
-      break;
-    }
+	OneWire_Reset(&OneWire); // Reset the bus
+	OneWire_SelectWithPointer(&OneWire, (uint8_t*)&ds18b20[number].Address); // Select the sensor by ROM
+	OneWire_WriteByte(&OneWire, ONEWIRE_CMD_RSCRATCHPAD); // Read scratchpad command
+	
+	for (i = 0; i < DS18B20_DATA_LEN; i++) // Read scratchpad
+		data[i] = OneWire_ReadByte(&OneWire);
+	
+#ifdef _DS18B20_USE_CRC
+	crc = OneWire_CRC8(data, 8); // CRC calculation
 
-    /* Check CRC */
-    if (ow_crc(r_data, 8) != r_data[8])
-    {
-      break;
-    }
+	if (crc != data[8])
+		return 0; // CRC invalid
+#endif
+	temperature = data[0] | (data[1] << 8); // Temperature is 16-bit length
 
-    /* Read Raw data */
-    raw = (uint16_t) (r_data[0] | (r_data[1] << 8));
+	OneWire_Reset(&OneWire); // Reset the bus
+	
+	resolution = ((data[4] & 0x60) >> 5) + 9; // Sensor's resolution from scratchpad's byte 4
 
-    /* Check Sign */
-    if (raw & 0x8000)
-    {
-      raw = (~raw + 1);
-      sign = -1;
-    }
-
-    /* Determine resolution (9–12 bits) */
-    resolution = ((r_data[4] & 0x60) >> 5) + 9;
-    switch (resolution)
-    {
-    case DS18B20_CNV_BIT_9:
-      /* 0.5°C per bit → 50 per bit in x100 units */
-      temp_x100 = (raw >> 3) * 50;
-      handle->cnv_bit_last = DS18B20_CNV_BIT_9;
-      break;
-    case DS18B20_CNV_BIT_10:
-      /* 0.25°C per bit → 25 per bit in x100 units */
-      temp_x100 = (raw >> 2) * 25;
-      handle->cnv_bit_last = DS18B20_CNV_BIT_10;
-      break;
-    case DS18B20_CNV_BIT_11:
-      /* 0.125°C per bit → 12.5 per bit in x100 units ≈ 125 / 10 */
-      temp_x100 = (raw >> 1) * 125 / 10;
-      handle->cnv_bit_last = DS18B20_CNV_BIT_11;
-      break;
-    case DS18B20_CNV_BIT_12:
-      /* 0.0625°C per bit → 6.25 per bit in x100 units = 625 / 100 */
-      temp_x100 = raw * 625 / 100;
-      handle->cnv_bit_last = DS18B20_CNV_BIT_12;
-      break;
-    default:
-      sign = 1;
-      break;
-    }
-
-    temp_x100 *= sign;
-
-  }
-  while (0);
-
-  return (int16_t) temp_x100;
+	switch (resolution) // Chceck the correct value dur to resolution
+	{
+		case DS18B20_Resolution_9bits:
+			result = temperature*(float)DS18B20_STEP_9BIT;
+		break;
+		case DS18B20_Resolution_10bits:
+			result = temperature*(float)DS18B20_STEP_10BIT;
+		 break;
+		case DS18B20_Resolution_11bits:
+			result = temperature*(float)DS18B20_STEP_11BIT;
+		break;
+		case DS18B20_Resolution_12bits:
+			result = temperature*(float)DS18B20_STEP_12BIT;
+		 break;
+		default: 
+			result = 0xFF;
+	}
+	
+	*destination = result;
+	
+	return 1; //temperature valid
 }
 
-/*************************************************************************************************/
-/**
- * @brief Convert temperature from Celsius to Fahrenheit.
- * @param[in] temp_c: Temperature in Celsius * 100 (e.g., 1025 = 10.25°C)
- * @retval Temperature in Fahrenheit * 100 (e.g., 7234 = 72.34°F),
- *         returns DS18B20_ERROR if error
- */
-int16_t ds18b20_cnv_to_f(int16_t temp_c)
+uint8_t DS18B20_GetResolution(uint8_t number)
 {
-  /* Check for error */
-  if (temp_c == DS18B20_ERROR)
-  {
-    return DS18B20_ERROR;
-  }
+	if( number >= TempSensorCount)
+		return 0;
 
-  /* Convert to Fahrenheit: F = C * 1.8 + 32 */
-  /* Multiply everything by 100 to keep hundredths */
-  /* F_x100 = (C_x100 * 9 / 5) + 3200 */
-  return (int16_t)((int32_t) temp_c * 9) / 5 + 3200;
+	uint8_t conf;
+	
+	if (!DS18B20_Is((uint8_t*)&ds18b20[number].Address))
+		return 0;
+	
+	OneWire_Reset(&OneWire); // Reset the bus
+	OneWire_SelectWithPointer(&OneWire, (uint8_t*)&ds18b20[number].Address); // Select the sensor by ROM
+	OneWire_WriteByte(&OneWire, ONEWIRE_CMD_RSCRATCHPAD); // Read scratchpad command
+
+	OneWire_ReadByte(&OneWire);
+	OneWire_ReadByte(&OneWire);
+	OneWire_ReadByte(&OneWire);
+	OneWire_ReadByte(&OneWire);
+	
+	conf = OneWire_ReadByte(&OneWire); // Register 5 is the configuration register with resolution
+	conf &= 0x60; // Mask two resolution bits
+	conf >>= 5; // Shift to left
+	conf += 9; // Get the result in number of resolution bits
+	
+	return conf;
 }
 
-/*************************************************************************************************/
-/**
- * @brief Read last conversation bit.
- * @param[in] handle: Pointer to the ds18b20 handle.
- * @retval ds18b20_cnv_bit_t conversation bit length
- */
-ds18b20_cnv_bit_t ds18b20_read_last_cnv_bit(ds18b20_t *handle)
+uint8_t DS18B20_SetResolution(uint8_t number, DS18B20_Resolution_t resolution)
 {
-  assert_param(handle != NULL);
+	if( number >= TempSensorCount)
+		return 0;
 
-  return handle->cnv_bit_last;
+	uint8_t th, tl, conf;
+	if (!DS18B20_Is((uint8_t*)&ds18b20[number].Address))
+		return 0;
+	
+	OneWire_Reset(&OneWire); // Reset the bus
+	OneWire_SelectWithPointer(&OneWire, (uint8_t*)&ds18b20[number].Address); // Select the sensor by ROM
+	OneWire_WriteByte(&OneWire, ONEWIRE_CMD_RSCRATCHPAD); // Read scratchpad command
+	
+	OneWire_ReadByte(&OneWire);
+	OneWire_ReadByte(&OneWire);
+	
+	th = OneWire_ReadByte(&OneWire); 	// Writing to scratchpad begins from the temperature alarms bytes
+	tl = OneWire_ReadByte(&OneWire); 	// 	so i have to store them.
+	conf = OneWire_ReadByte(&OneWire);	// Config byte
+	
+	if (resolution == DS18B20_Resolution_9bits) // Bits setting
+	{
+		conf &= ~(1 << DS18B20_RESOLUTION_R1);
+		conf &= ~(1 << DS18B20_RESOLUTION_R0);
+	}
+	else if (resolution == DS18B20_Resolution_10bits) 
+	{
+		conf &= ~(1 << DS18B20_RESOLUTION_R1);
+		conf |= 1 << DS18B20_RESOLUTION_R0;
+	}
+	else if (resolution == DS18B20_Resolution_11bits)
+	{
+		conf |= 1 << DS18B20_RESOLUTION_R1;
+		conf &= ~(1 << DS18B20_RESOLUTION_R0);
+	}
+	else if (resolution == DS18B20_Resolution_12bits)
+	{
+		conf |= 1 << DS18B20_RESOLUTION_R1;
+		conf |= 1 << DS18B20_RESOLUTION_R0;
+	}
+	
+	OneWire_Reset(&OneWire); // Reset the bus
+	OneWire_SelectWithPointer(&OneWire, (uint8_t*)&ds18b20[number].Address); // Select the sensor by ROM
+	OneWire_WriteByte(&OneWire, ONEWIRE_CMD_WSCRATCHPAD); // Write scratchpad command
+	
+	OneWire_WriteByte(&OneWire, th); // Write 3 bytes to scratchpad
+	OneWire_WriteByte(&OneWire, tl);
+	OneWire_WriteByte(&OneWire, conf);
+	
+	OneWire_Reset(&OneWire); // Reset the bus
+	OneWire_SelectWithPointer(&OneWire, (uint8_t*)&ds18b20[number].Address); // Select the sensor by ROM
+	OneWire_WriteByte(&OneWire, ONEWIRE_CMD_CPYSCRATCHPAD); // Copy scratchpad to EEPROM
+	
+	return 1;
 }
 
-/*************************************************************************************************/
-/** End of File **/
-/*************************************************************************************************/
+uint8_t DS18B20_Is(uint8_t* ROM)
+{
+	if (*ROM == DS18B20_FAMILY_CODE) // Check family code
+		return 1;
+	return 0;
+}
+
+uint8_t DS18B20_AllDone(void)
+{
+	return OneWire_ReadBit(&OneWire); // Bus is down - busy
+}
+
+void DS18B20_ReadAll(void)
+{
+	uint8_t i;
+
+	if (DS18B20_AllDone())
+	{
+		for(i = 0; i < TempSensorCount; i++) // All detected sensors loop
+		{
+			ds18b20[i].ValidDataFlag = 0;
+
+			if (DS18B20_Is((uint8_t*)&ds18b20[i].Address))
+			{
+				ds18b20[i].ValidDataFlag = DS18B20_Read(i, &ds18b20[i].Temperature); // Read single sensor
+			}
+		}
+	}
+}
+
+void DS18B20_GetROM(uint8_t number, uint8_t* ROM)
+{
+	if( number >= TempSensorCount)
+		number = TempSensorCount;
+
+	uint8_t i;
+
+	for(i = 0; i < 8; i++)
+		ROM[i] = ds18b20[number].Address[i];
+}
+
+void DS18B20_WriteROM(uint8_t number, uint8_t* ROM)
+{
+	if( number >= TempSensorCount)
+		return;
+
+	uint8_t i;
+
+	for(i = 0; i < 8; i++)
+		ds18b20[number].Address[i] = ROM[i]; // Write ROM into sensor's structure
+}
+
+uint8_t DS18B20_Quantity(void)
+{
+	return TempSensorCount;
+}
+
+uint8_t DS18B20_GetTemperature(uint8_t number, float* destination)
+{
+	if(!ds18b20[number].ValidDataFlag)
+		return 0;
+
+	*destination = ds18b20[number].Temperature;
+	return 1;
+
+}
+
+void DS18B20_Init(DS18B20_Resolution_t resolution)
+{
+	uint8_t next = 0, i = 0, j;
+	OneWire_Init(&OneWire, DS18B20_GPIO_Port, DS18B20_Pin); // Init OneWire bus
+
+	next = OneWire_First(&OneWire); // Search first OneWire device
+	while(next)
+	{
+		TempSensorCount++;
+		OneWire_GetFullROM(&OneWire, (uint8_t*)&ds18b20[i++].Address); // Get the ROM of next sensor
+		next = OneWire_Next(&OneWire);
+		if(TempSensorCount >= _DS18B20_MAX_SENSORS) // More sensors than set maximum is not allowed
+			break;
+	}
+
+	for(j = 0; j < i; j++)
+	{
+		DS18B20_SetResolution(j, resolution); // Set the initial resolution to sensor
+
+		DS18B20_StartAll(); // Start conversion on all sensors
+	}
+}
+
+

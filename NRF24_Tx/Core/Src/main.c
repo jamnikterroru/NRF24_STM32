@@ -2,20 +2,11 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2025 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
+  * @brief          : Main program body - LIBRARY VERSION (TIMER BASED)
   ******************************************************************************
   */
 /* USER CODE END Header */
+
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "spi.h"
@@ -26,47 +17,38 @@
 /* USER CODE BEGIN Includes */
 #include <string.h>
 #include <stdio.h>
-#include "ds18b20.h"
-#include "ow.h"
 #include "NRF24.h"
 #include "NRF24_reg_addresses.h"
+#include "ds18b20.h" // Nowa biblioteka
 /* USER CODE END Includes */
-
-/* Private typedef -----------------------------------------------------------*/
-/* USER CODE BEGIN PTD */
-
-/* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
+// Definicje pinów dla biblioteki DS18B20.
+// Biblioteka oczekuje tych nazw makr w swoim kodzie.
+#define DS18B20_GPIO_Port GPIOB
+#define DS18B20_Pin       GPIO_PIN_0
+
 /* USER CODE END PD */
 
-/* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
-
-/* USER CODE END PM */
-
 /* Private variables ---------------------------------------------------------*/
-
 /* USER CODE BEGIN PV */
+
+// Zmienne NRF24
 uint8_t tx_address[5] = {0xE7, 0xE7, 0xE7, 0xE7, 0xE7};
-ow_t ds18;     // Struktura czujnika z biblioteki NimaLTD
 uint8_t tx_data[32];
-float temperatura = 0.0f;
-volatile int kod_bledu = 0;
-volatile uint32_t moj_zegar = 0;
+
+// Zmienne Temperatura
+float temperature = 0.0f;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-/* USER CODE BEGIN PFP */
 
-/* USER CODE END PFP */
-
-/* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+// Tu było kiedyś DWT i bit-banging. Teraz jest czysto.
 /* USER CODE END 0 */
 
 /**
@@ -75,93 +57,90 @@ void SystemClock_Config(void);
   */
 int main(void)
 {
-
-  /* USER CODE BEGIN 1 */
-
-  /* USER CODE END 1 */
-
   /* MCU Configuration--------------------------------------------------------*/
-
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
-
-  /* USER CODE BEGIN Init */
-  moj_zegar = HAL_RCC_GetHCLKFreq();
-  /* USER CODE END Init */
-
-  /* Configure the system clock */
   SystemClock_Config();
-
-  /* USER CODE BEGIN SysInit */
-
-  /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_SPI1_Init();
+
+  // WAŻNE: Inicjalizacja TIM2 jest krytyczna dla nowej biblioteki DS18B20!
+  // Upewnij się, że w CubeMX Prescaler = 71 (dla 72MHz CPU)
   MX_TIM2_Init();
+
   /* USER CODE BEGIN 2 */
-  ow_init_t ow_init_struct;
 
-  // 1. Wybierz Timer, który skonfigurowałeś w CubeMX (np. &htim2)
-  ow_init_struct.tim_handle = &htim2;
-  ow_init_struct.gpio = GPIOB;
-  ow_init_struct.pin = GPIO_PIN_0;
-  ow_init_struct.tim_cb = NULL;
-  ow_init_struct.done_cb = NULL;
+  // --- INICJALIZACJA NRF24 ---
+  csn_high();
+  ce_high();
+  HAL_Delay(100);
 
-  // Inicjalizacja czujnika
-  ds18b20_init(&ds18, &ow_init_struct);
-  /* Konfiguracja czujnika DS18B20 */
-  ds18b20_config_t ds_cfg;
+  nrf24_init();
+  nrf24_tx_pwr(3);          // Max moc
+  nrf24_data_rate(0);       // 1Mbps
+  nrf24_set_channel(81);
+  nrf24_set_addr_width(5);
+  nrf24_open_tx_pipe(tx_address);
+  nrf24_stop_listen();      // Tryb nadajnika
 
-  // Ustawiamy progi alarmowe (można wpisać cokolwiek, jeśli nie używasz alarmów)
-  ds_cfg.alarm_low = -55;
-  ds_cfg.alarm_high = 125;
+  // --- INICJALIZACJA DS18B20 ---
+  // Biblioteka sama uruchomi Timer 2 i przeskanuje magistralę
+  DS18B20_Init(DS18B20_Resolution_12bits);
 
-  // Ustawiamy rozdzielczość na 12 bitów (najdokładniejsza, ale wolna - 750ms)
-  ds_cfg.cnv_bit = DS18B20_CNV_BIT_12;
-
-  // Wysyłamy konfigurację do czujnika
-  ds18b20_conf(&ds18, &ds_cfg);
-
-  HAL_TIM_Base_Start_IT(&htim2);
-  // Inicjalizacja radia
-    csn_high();
-    ce_high(); // Albo low, zależy od stanu początkowego, bezpiecznie dać High
-    HAL_Delay(5);
-
-    nrf24_init();
-
-    // Konfiguracja zgodna z Twoją biblioteką
-    nrf24_tx_pwr(3);          // Max moc
-    nrf24_data_rate(0);       // 1Mbps (zgodnie z enumem w Twojej lib: 0=_1mbps)
-    nrf24_set_channel(81);    // Kanał
-    nrf24_set_addr_width(5);
-
-    nrf24_open_tx_pipe(tx_address); // Ustawienie adresu nadawczego
-
-    // To jest nadajnik, więc nie słuchamy
-    nrf24_stop_listen();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  // 1. Rozpocznij konwersję na wszystkich czujnikach
+	  DS18B20_StartAll();
 
-	    }
+	  // 2. Czekaj na konwersję (dla 12bit to max 750ms)
+	  // Biblioteka nie blokuje procesora w StartAll, więc musimy poczekać tutaj
+	  HAL_Delay(1000);
+
+	  // 3. Odczytaj dane z czujników do struktur w pamięci
+	  DS18B20_ReadAll();
+
+	  // 4. Sprawdź czy mamy jakiekolwiek czujniki
+	  if(DS18B20_Quantity() > 0)
+	  {
+		  // Pobierz temperaturę z pierwszego czujnika (indeks 0)
+		  if(DS18B20_GetTemperature(0, &temperature))
+		  {
+			  // Sukces - temperatura odczytana
+			  sprintf((char*)tx_data, "Temp: %.2f C", temperature);
+		  }
+		  else
+		  {
+			  // Suma kontrolna CRC się nie zgadza
+			  sprintf((char*)tx_data, "Error: CRC Fail");
+		  }
+	  }
+	  else
+	  {
+		  // Nie wykryto żadnych czujników na linii
+		  sprintf((char*)tx_data, "Error: No Sensor");
+	  }
+
+	  // 5. Wyślij przez NRF
+	  nrf24_transmit(tx_data, 32);
+
+	  // Mrugnij diodą (jeśli masz na PC13)
+	  HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+
+	  HAL_Delay(1000);
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
+}
 
-
-/**
-  * @brief System Clock Configuration
-  * @retval None
-  */
+/* USER CODE BEGIN 4 */
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
@@ -197,42 +176,11 @@ void SystemClock_Config(void)
   }
 }
 
-/* USER CODE BEGIN 4 */
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-    if (htim->Instance == TIM2) {
-        ow_callback(&ds18.ow);
-    }
-}
-/* USER CODE END 4 */
-
-/**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
 void Error_Handler(void)
 {
-  /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
   while (1)
   {
   }
-  /* USER CODE END Error_Handler_Debug */
 }
-#ifdef USE_FULL_ASSERT
-/**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
-void assert_failed(uint8_t *file, uint32_t line)
-{
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
-}
-#endif /* USE_FULL_ASSERT */
+/* USER CODE END 4 */

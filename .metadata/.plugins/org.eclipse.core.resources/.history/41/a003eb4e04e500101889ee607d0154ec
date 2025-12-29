@@ -1,0 +1,281 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body - DS18B20 ROBUST VERSION
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "spi.h"
+#include "tim.h"
+#include "gpio.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include <string.h>
+#include <stdio.h>
+#include "NRF24.h"
+#include "NRF24_reg_addresses.h"
+/* USER CODE END Includes */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+// Upewnij się, że to są poprawne piny!
+#define DS_PORT GPIOB
+#define DS_PIN  GPIO_PIN_0
+/* USER CODE END PD */
+
+/* Private variables ---------------------------------------------------------*/
+/* USER CODE BEGIN PV */
+uint8_t tx_address[5] = {0xE7, 0xE7, 0xE7, 0xE7, 0xE7};
+uint8_t tx_data[32];
+float temperature = 0.0f;
+uint8_t Presence = 0;
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+
+/* USER CODE BEGIN 0 */
+
+// --- DWT DELAY (Precyzyjne opóźnienia) ---
+void DWT_Init(void) {
+    if (!(CoreDebug->DEMCR & CoreDebug_DEMCR_TRCENA_Msk)) {
+        CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+        DWT->CYCCNT = 0;
+        DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    }
+}
+
+void delay_us(uint32_t us) {
+    uint32_t start_tick = DWT->CYCCNT;
+    uint32_t delay_ticks = (SystemCoreClock / 1000000) * us;
+    while ((DWT->CYCCNT - start_tick) < delay_ticks);
+}
+
+// --- FUNKCJE POMOCNICZE GPIO ---
+
+void Set_Pin_Output(GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin) {
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitStruct.Pin = GPIO_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP; // Push-Pull
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+    HAL_GPIO_Init(GPIOx, &GPIO_InitStruct);
+}
+
+void Set_Pin_Input(GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin) {
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitStruct.Pin = GPIO_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pull = GPIO_NOPULL; // Tu zakładamy zewn. rezystor 4.7k!
+    HAL_GPIO_Init(GPIOx, &GPIO_InitStruct);
+}
+
+// --- BIBLIOTEKA DS18B20 ---
+
+uint8_t DS18B20_Start(void) {
+    uint8_t Response = 0;
+
+    Set_Pin_Output(DS_PORT, DS_PIN);
+    HAL_GPIO_WritePin(DS_PORT, DS_PIN, 0); // Ściągnij do 0
+    delay_us(480);                         // Reset Pulse
+
+    Set_Pin_Input(DS_PORT, DS_PIN);        // Zwolnij linię
+    delay_us(80);                          // Czekaj na Presence Pulse
+
+    if (!HAL_GPIO_ReadPin(DS_PORT, DS_PIN)) {
+        Response = 1; // Jest czujnik (stan niski)
+    } else {
+        Response = 0; // Brak czujnika (stan wysoki)
+    }
+
+    delay_us(400); // Dokończ slot
+    return Response;
+}
+
+void DS18B20_Write(uint8_t data) {
+    Set_Pin_Output(DS_PORT, DS_PIN); // Ustawiamy na wyjście raz przed pętlą
+
+    for (int i = 0; i < 8; i++) {
+
+        // --- SEKCJA KRYTYCZNA START ---
+        // Wyłączamy przerwania, żeby nic nie zakłóciło krótkich impulsów
+        __disable_irq();
+
+        if ((data & (1 << i)) != 0) {  // Piszemy 1
+
+            HAL_GPIO_WritePin(DS_PORT, DS_PIN, 0);
+            delay_us(1); // 1us Low
+
+            HAL_GPIO_WritePin(DS_PORT, DS_PIN, 1);
+            delay_us(60); // 60us High
+
+        } else {  // Piszemy 0
+
+            HAL_GPIO_WritePin(DS_PORT, DS_PIN, 0);
+            delay_us(60); // 60us Low
+
+            HAL_GPIO_WritePin(DS_PORT, DS_PIN, 1);
+        }
+
+        __enable_irq();
+        // --- SEKCJA KRYTYCZNA STOP ---
+    }
+}
+
+uint8_t DS18B20_Read(void) {
+    uint8_t value = 0;
+    Set_Pin_Input(DS_PORT, DS_PIN); // Upewnij się, że startujemy jako wejście (tylko dla bezpieczeństwa)
+
+    for (int i = 0; i < 8; i++) {
+        Set_Pin_Output(DS_PORT, DS_PIN); // Zmieniamy na wyjście, żeby zainicjować slot
+
+        // --- SEKCJA KRYTYCZNA START ---
+        __disable_irq();
+
+        HAL_GPIO_WritePin(DS_PORT, DS_PIN, 0); // Pull Low
+        delay_us(2);                           // 2us
+
+        Set_Pin_Input(DS_PORT, DS_PIN);        // Release (Input mode)
+        delay_us(10);                          // Czekamy na próbkę
+
+        if (HAL_GPIO_ReadPin(DS_PORT, DS_PIN)) {
+            value |= 1 << i;
+        }
+
+        delay_us(50); // Dokończ slot
+
+        __enable_irq();
+        // --- SEKCJA KRYTYCZNA STOP ---
+    }
+    return value;
+}
+
+float DS18B20_Get_Temp(void) {
+    uint8_t Temp_byte1, Temp_byte2;
+    uint16_t TEMP_RAW;
+    float final_temp = 0.0f;
+
+    Presence = DS18B20_Start();
+    HAL_Delay(1);
+
+    if (Presence) {
+        DS18B20_Write(0xCC); // Skip ROM
+        DS18B20_Write(0x44); // Convert T
+
+        HAL_Delay(800);      // Czekamy na konwersję (ważne!)
+
+        Presence = DS18B20_Start();
+        HAL_Delay(1);
+        DS18B20_Write(0xCC); // Skip ROM
+        DS18B20_Write(0xBE); // Read Scratchpad
+
+        Temp_byte1 = DS18B20_Read(); // LSB
+        Temp_byte2 = DS18B20_Read(); // MSB
+
+        TEMP_RAW = (Temp_byte2 << 8) | Temp_byte1;
+
+        // Obsługa temperatur ujemnych
+        if(TEMP_RAW & 0x8000) {
+            TEMP_RAW = ~TEMP_RAW + 1;
+            final_temp = -((float)TEMP_RAW / 16.0f);
+        } else {
+            final_temp = (float)TEMP_RAW / 16.0f;
+        }
+
+        return final_temp;
+    }
+    return -999.0f; // Kod błędu
+}
+
+/* USER CODE END 0 */
+
+int main(void)
+{
+  HAL_Init();
+  SystemClock_Config();
+
+  MX_GPIO_Init();
+  MX_SPI1_Init();
+  MX_TIM2_Init();
+
+  /* USER CODE BEGIN 2 */
+  DWT_Init();
+
+  // Inicjalizacja NRF
+  csn_high();
+  ce_high();
+  HAL_Delay(10); // Dajmy mu chwilę
+
+  nrf24_init();
+  nrf24_tx_pwr(3);
+  nrf24_data_rate(0); // 1Mbps
+  nrf24_set_channel(81);
+  nrf24_set_addr_width(5);
+  nrf24_open_tx_pipe(tx_address);
+  nrf24_stop_listen();
+  /* USER CODE END 2 */
+
+  while (1)
+  {
+
+	  // Pobierz temperaturę gotową funkcją
+      temperature = DS18B20_Get_Temp();
+
+      if (temperature > -100.0f) {
+          sprintf((char*)tx_data, "Temp: %.2f C", temperature);
+      } else {
+          sprintf((char*)tx_data, "Error: No Sensor");
+      }
+
+      nrf24_transmit(tx_data, 32);
+
+      //Mrugnij diodą (PC13) dla potwierdzenia życia, jeśli masz
+      HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+
+      HAL_Delay(1000);
+  }
+}
+
+/* USER CODE BEGIN 4 */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+void Error_Handler(void)
+{
+  __disable_irq();
+  while (1)
+  {
+  }
+}
+/* USER CODE END 4 */

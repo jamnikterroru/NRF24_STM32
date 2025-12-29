@@ -1,152 +1,92 @@
-
 /*
- * @file        ds18b20.h
- * @brief       ds18b20 driver
- * @author      Nima Askari
- * @version     2.0.0
- * @license     See the LICENSE file in the root folder.
+ * ds18b20.h
  *
- * @note        All my libraries are dual-licensed. 
- *              Please review the licensing terms before using them.
- *              For any inquiries, feel free to contact me.
+ *	The MIT License.
+ *  Created on: 20.09.2018
+ *      Author: Mateusz Salamon
+ *      www.msalamon.pl
+ *      mateusz@msalamon.pl
  *
- * @github      https://www.github.com/nimaltd
- * @linkedin    https://www.linkedin.com/in/nimaltd
- * @youtube     https://www.youtube.com/@nimaltd
- * @instagram   https://instagram.com/github.nimaltd
- *
- * Copyright (C) 2025 Nima Askari - NimaLTD. All rights reserved.
  */
+#ifndef	_DS18B20_H
+#define	_DS18B20_H
 
-#ifndef _DS18B20_H_
-#define _DS18B20_H_
+#include "onewire.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+//
+//	CONFIGURATION
+//
 
-/*************************************************************************************************/
-/** Includes **/
-/*************************************************************************************************/
+//	Remember to configure a timer on CubeMX 1us per tick
+//	example 72 MHz cpu - Prescaler=(72-1), Counter period=65000
+#define _DS18B20_MAX_SENSORS		    4
+#define	_DS18B20_GPIO					DS18B20_GPIO_Port
+#define	_DS18B20_PIN					DS18B20_Pin
 
-#include <stdbool.h>
-#include "main.h"
-#include "ow.h"
+#define	_DS18B20_TIMER					htim2
 
-/*************************************************************************************************/
-/** Definitions **/
-/*************************************************************************************************/
+//#define _DS18B20_USE_CRC
 
-#define DS18B20_ID          0x28
-#define DS18B20_ERROR       -10000
-
-/*************************************************************************************************/
-/** Typedef/Struct/Enum **/
-/*************************************************************************************************/
-
-/*************************************************************************************************/
-/* DS18B20 Command Codes */
-typedef enum
-{
-  DS18B20_CMD_CONV   = 0x44,  /* Start temperature conversion */
-  DS18B20_CMD_CONF   = 0x4E,  /* Write to configuration register */
-  DS18B20_CMD_READ   = 0xBE,  /* Read scratchpad */
-  DS18B20_CMD_RECALL = 0xB8,  /* Recall EEPROM */
-  DS18B20_CMD_POWER  = 0xB4   /* Check power supply (parasite power mode) */
-
-} ds18b20_cmd_t;
-
-/*************************************************************************************************/
-/* DS18B20 Resolution (conversion bits) */
-typedef enum
-{
-  DS18B20_CNV_BIT_9   = 9,
-  DS18B20_CNV_BIT_10  = 10,
-  DS18B20_CNV_BIT_11  = 11,
-  DS18B20_CNV_BIT_12  = 12
-
-} ds18b20_cnv_bit_t;
-
-/*************************************************************************************************/
-/* DS18B20 Conversion Times (in milliseconds) for each resolution */
-typedef enum
-{
-  DS18B20_CNV_TIM_9   = 100UL,
-  DS18B20_CNV_TIM_10  = 200UL,
-  DS18B20_CNV_TIM_11  = 400UL,
-  DS18B20_CNV_TIM_12  = 800UL
-
-} ds18b20_cnv_tim_t;
-
-/*************************************************************************************************/
-/* DS18B20 Configuration Structure */
+//
+//	Sensor structure
+//
 typedef struct
 {
-  int8_t              alarm_low;  /* Low temperature alarm threshold */
-  int8_t              alarm_high; /* High temperature alarm threshold */
-  ds18b20_cnv_bit_t   cnv_bit;    /* Temperature resolution (9–12 bit) */
+	uint8_t 	Address[8];
+	float 		Temperature;
+	uint8_t		ValidDataFlag;
+} Ds18b20Sensor_t;
 
-} ds18b20_config_t;
+//
+//	DEFINES
+//
+#define DS18B20_FAMILY_CODE				0x28
 
-/*************************************************************************************************/
-/* DS18B20 Driver Handle */
-typedef struct
-{
-  ow_t                  ow;           /* One-Wire interface handle */
-  uint32_t              time;         /* Start conversion timestamp */
-  ds18b20_cnv_tim_t     cnv_time;     /* Conversion time based on resolution */
-  ds18b20_cnv_bit_t     cnv_bit_last; /* Store Last conversation bit length */
+#define DS18B20_CMD_ALARMSEARCH			0xEC
+#define DS18B20_CMD_CONVERTTEMP			0x44
 
-} ds18b20_t;
+#define DS18B20_STEP_12BIT		0.0625
+#define DS18B20_STEP_11BIT		0.125
+#define DS18B20_STEP_10BIT		0.25
+#define DS18B20_STEP_9BIT		0.5
 
-/*************************************************************************************************/
-/** API Functions **/
-/*************************************************************************************************/
+#define DS18B20_RESOLUTION_R1	6 // Resolution bit R1
+#define DS18B20_RESOLUTION_R0	5 // Resolution bit R0
 
-/* Initialize ds18b20 driver */
-void      ds18b20_init(ds18b20_t *handle, ow_init_t *init);
-
-/* Check if ds18b20 bus is busy */
-bool      ds18b20_is_busy(ds18b20_t *handle);
-
-/* Check if ds18b20 bus is busy */
-ow_err_t  ds18b20_last_error(ds18b20_t *handle);
-
-/* Start search to update all ROM IDs on the 1-Wire bus */
-ow_err_t  ds18b20_update_rom_id(ds18b20_t *handle);
-
-/* Send Start Conversation to All Devices */
-ow_err_t  ds18b20_cnv(ds18b20_t *handle);
-
-/* Set new configuration */
-ow_err_t  ds18b20_conf(ds18b20_t *handle, ds18b20_config_t *config);
-
-/* Check if ds18b20 conversation is done */
-bool      ds18b20_is_cnv_done(ds18b20_t *handle);
-
-#if (OW_MAX_DEVICE == 1)
-/* Send read temperature request */
-ow_err_t  ds18b20_req_read(ds18b20_t *handle);
+#ifdef _DS18B20_USE_CRC
+#define DS18B20_DATA_LEN	9
 #else
-/* Send read temperature request */
-ow_err_t  ds18b20_req_read(ds18b20_t *handle, uint8_t rom_id);
+#define DS18B20_DATA_LEN	5
 #endif
 
-/* Read temperature in Celsius */
-int16_t   ds18b20_read_c(ds18b20_t *handle);
+typedef enum {
+	DS18B20_Resolution_9bits = 9,
+	DS18B20_Resolution_10bits = 10,
+	DS18B20_Resolution_11bits = 11,
+	DS18B20_Resolution_12bits = 12
+} DS18B20_Resolution_t;
 
-/* Convert temperature from Celsius to Fahrenheit */
-int16_t   ds18b20_cnv_to_f(int16_t temp_c);
+//
+//	FUNCTIONS
+//
 
-/* Read Last conversation bit */
-ds18b20_cnv_bit_t
-          ds18b20_read_last_cnv_bit(ds18b20_t *handle);
-
-/*************************************************************************************************/
-/** End of File **/
-/*************************************************************************************************/
-
-#ifdef __cplusplus
-}
+// 	Init
+void		DS18B20_Init(DS18B20_Resolution_t resolution);
+//	Settings
+uint8_t 	DS18B20_GetResolution(uint8_t number); // Get the sensor resolution
+uint8_t 	DS18B20_SetResolution(uint8_t number, DS18B20_Resolution_t resolution);	// Set the sensor resolution
+// Control
+uint8_t 	DS18B20_Start(uint8_t number); // Start conversion of one sensor
+void 		DS18B20_StartAll(void);	// Start conversion for all sensors
+uint8_t		DS18B20_Read(uint8_t number, float* destination); // Read one sensor
+void 		DS18B20_ReadAll(void);	// Read all connected sensors
+uint8_t 	DS18B20_Is(uint8_t* ROM); // Check if ROM address is DS18B20 family
+uint8_t 	DS18B20_AllDone(void);	// Check if all sensor's conversion is done
+//	ROMs
+void		DS18B20_GetROM(uint8_t number, uint8_t* ROM); // Get sensor's ROM from 'number' position
+void		DS18B20_WriteROM(uint8_t number, uint8_t* ROM); // Write a ROM to 'number' position in sensors table
+// Return functions
+uint8_t 	DS18B20_Quantity(void);	// Returns quantity of connected sensors
+uint8_t		DS18B20_GetTemperature(uint8_t number, float* destination); // Returns 0 if read data is invalid
 #endif
-#endif /* _DS18B20_H_ */
+

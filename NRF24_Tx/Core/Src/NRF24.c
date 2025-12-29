@@ -2,7 +2,7 @@
  * 25-JUL-2024
  * STM32 HAL NRF24 LIBRARY
  */
-
+#include "main.h"
 #include <stdio.h>
 #include "stm32f1xx_hal.h"
 #include "NRF24_conf.h"
@@ -34,8 +34,8 @@ void nrf24_w_reg(uint8_t reg, uint8_t *data, uint8_t size){
 
 	csn_low();
 
-	HAL_SPI_Transmit(&hspiX, &cmd, 1, spi_w_timeout);
-	HAL_SPI_Transmit(&hspiX, data, size, spi_w_timeout);
+	HAL_SPI_Transmit(&hspi1, &cmd, 1, spi_w_timeout);
+	HAL_SPI_Transmit(&hspi1, data, size, spi_w_timeout);
 
 	csn_high();
 }
@@ -46,8 +46,8 @@ uint8_t nrf24_r_reg(uint8_t reg, uint8_t size){
 
 	csn_low();
 
-	HAL_SPI_Transmit(&hspiX, &cmd, 1, spi_w_timeout);
-	HAL_SPI_Receive(&hspiX, &data, size, spi_r_timeout);
+	HAL_SPI_Transmit(&hspi1, &cmd, 1, spi_w_timeout);
+	HAL_SPI_Receive(&hspi1, &data, size, spi_r_timeout);
 
 	csn_high();
 
@@ -55,15 +55,15 @@ uint8_t nrf24_r_reg(uint8_t reg, uint8_t size){
 }
 
 void nrf24_w_spec_cmd(uint8_t cmd){
-	HAL_SPI_Transmit(&hspiX, &cmd, 1, spi_w_timeout);
+	HAL_SPI_Transmit(&hspi1, &cmd, 1, spi_w_timeout);
 }
 
 void nrf24_w_spec_reg(uint8_t *data, uint8_t size){
-	HAL_SPI_Transmit(&hspiX, data, size, spi_w_timeout);
+	HAL_SPI_Transmit(&hspi1, data, size, spi_w_timeout);
 }
 
 void nrf24_r_spec_reg(uint8_t *data, uint8_t size){
-	HAL_SPI_Receive(&hspiX, data, size, spi_r_timeout);
+	HAL_SPI_Receive(&hspi1, data, size, spi_r_timeout);
 }
 
 void nrf24_pwr_up(void){
@@ -237,7 +237,7 @@ uint8_t nrf24_r_status(void){
 	uint8_t cmd = NOP_CMD;
 
 	csn_low();
-	HAL_SPI_TransmitReceive(&hspiX, &cmd, &data, 1, spi_rw_timeout);
+	HAL_SPI_TransmitReceive(&hspi1, &cmd, &data, 1, spi_rw_timeout);
 	csn_high();
 
 	return data;
@@ -455,8 +455,8 @@ uint8_t nrf24_transmit(uint8_t *data, uint8_t size){
 	uint8_t cmd = W_TX_PAYLOAD;
 
 	csn_low();
-	HAL_SPI_Transmit(&hspiX, &cmd, 1, spi_w_timeout);
-	HAL_SPI_Transmit(&hspiX, data, size, spi_w_timeout);
+	HAL_SPI_Transmit(&hspi1, &cmd, 1, spi_w_timeout);
+	HAL_SPI_Transmit(&hspi1, data, size, spi_w_timeout);
 	csn_high();
 
 	ce_high();
@@ -479,8 +479,8 @@ void nrf24_transmit_no_ack(uint8_t *data, uint8_t size){
 	uint8_t cmd = W_TX_PAYLOAD_NOACK;
 
 	csn_low();
-	HAL_SPI_Transmit(&hspiX, &cmd, 1, spi_w_timeout);
-	HAL_SPI_Transmit(&hspiX, data, size, spi_w_timeout);
+	HAL_SPI_Transmit(&hspi1, &cmd, 1, spi_w_timeout);
+	HAL_SPI_Transmit(&hspi1, data, size, spi_w_timeout);
 	csn_high();
 
 	ce_high();
@@ -497,8 +497,8 @@ void nrf24_transmit_rx_ack_pld(uint8_t pipe, uint8_t *data, uint8_t size){
 	uint8_t cmd = (W_ACK_PAYLOAD | pipe);
 
 	csn_low();
-	HAL_SPI_Transmit(&hspiX, &cmd, 1, spi_w_timeout);
-	HAL_SPI_Transmit(&hspiX, data, size, spi_w_timeout);
+	HAL_SPI_Transmit(&hspi1, &cmd, 1, spi_w_timeout);
+	HAL_SPI_Transmit(&hspi1, data, size, spi_w_timeout);
 	csn_high();
 
 }
@@ -522,8 +522,8 @@ void nrf24_receive(uint8_t *data, uint8_t size){
 	uint8_t cmd = R_RX_PAYLOAD;
 
 	csn_low();
-	HAL_SPI_Transmit(&hspiX, &cmd, 1, spi_w_timeout);
-	HAL_SPI_Receive(&hspiX, data, size, spi_r_timeout);
+	HAL_SPI_Transmit(&hspi1, &cmd, 1, spi_w_timeout);
+	HAL_SPI_Receive(&hspi1, data, size, spi_r_timeout);
 	csn_high();
 
 	nrf24_clear_rx_dr();
