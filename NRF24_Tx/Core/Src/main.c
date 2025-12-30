@@ -111,7 +111,7 @@ int main(void)
 		  if(DS18B20_GetTemperature(0, &temperature))
 		  {
 			  // Sukces - temperatura odczytana
-			  sprintf((char*)tx_data, "Temp: %.2f C", temperature);
+			  sprintf((char*)tx_data, "%.2f*C", temperature);
 		  }
 		  else
 		  {
