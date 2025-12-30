@@ -37,10 +37,39 @@
 
 // Zmienne NRF24
 uint8_t tx_address[5] = {0xE7, 0xE7, 0xE7, 0xE7, 0xE7};
-uint8_t tx_data[32];
 
-// Zmienne Temperatura
+// KLUCZ SZYFROWANIA (Może być dowolna liczba 0-255)
+#define CRYPTO_KEY 0xA5
+
+// Struktura pakietu (musi być identyczna w Tx i Rx)
+// Rozmiar: 4 (temp) + 4 (id) + 2 (crc) = 10 bajtów
+// Zmiana: dodane __attribute__((packed))
+typedef struct __attribute__((packed)) {
+    float temperature;
+    uint32_t packet_id;
+    uint16_t crc;
+} RadioPacket;
+
+RadioPacket myPacket;
+uint8_t tx_data[32];
 float temperature = 0.0f;
+
+// Prosta funkcja szyfrująca/deszyfrująca (XOR)
+void XOR_Cipher(uint8_t* data, uint16_t len) {
+    for(int i=0; i<len; i++) {
+        data[i] ^= CRYPTO_KEY;
+    }
+}
+
+uint16_t Calc_CRC(uint8_t* data, uint16_t len) {
+    uint16_t sum = 0;
+    for(int i=0; i<len; i++) {
+        sum += data[i];
+    }
+    return sum;
+}
+
+
 
 /* USER CODE END PV */
 
@@ -92,48 +121,54 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  uint32_t pck_counter = 0; // Licznik wysłanych pakietów
+
   while (1)
   {
 	  // 1. Rozpocznij konwersję na wszystkich czujnikach
-	  DS18B20_StartAll();
+	  	  DS18B20_StartAll();
 
-	  // 2. Czekaj na konwersję (dla 12bit to max 750ms)
-	  // Biblioteka nie blokuje procesora w StartAll, więc musimy poczekać tutaj
-	  HAL_Delay(1000);
+	  	  // 2. Czekaj na konwersję (dla 12bit to max 750ms)
+	  	  HAL_Delay(1000);
 
-	  // 3. Odczytaj dane z czujników do struktur w pamięci
-	  DS18B20_ReadAll();
+	  	  // 3. Odczytaj dane
+	  	  DS18B20_ReadAll();
 
-	  // 4. Sprawdź czy mamy jakiekolwiek czujniki
-	  if(DS18B20_Quantity() > 0)
-	  {
-		  // Pobierz temperaturę z pierwszego czujnika (indeks 0)
-		  if(DS18B20_GetTemperature(0, &temperature))
-		  {
-			  // Sukces - temperatura odczytana
-			  sprintf((char*)tx_data, "%.2f*C", temperature);
-		  }
-		  else
-		  {
-			  // Suma kontrolna CRC się nie zgadza
-			  sprintf((char*)tx_data, "Error: CRC Fail");
-		  }
-	  }
-	  else
-	  {
-		  // Nie wykryto żadnych czujników na linii
-		  sprintf((char*)tx_data, "Error: No Sensor");
-	  }
+	  	  // 4. Przygotuj dane do wysyłki
+	  	  if(DS18B20_Quantity() > 0 && DS18B20_GetTemperature(0, &temperature))
+	  	  {
+	  		  myPacket.temperature = temperature;
+	  	  }
+	  	  else
+	  	  {
+	  		  myPacket.temperature = -999.0f;
+	  	  }
 
-	  // 5. Wyślij przez NRF
-	  nrf24_transmit(tx_data, 32);
+	  	  // 5. Wypełnij resztę struktury
+	  	  myPacket.packet_id = pck_counter++; // Zwiększ licznik
 
-	  // Mrugnij diodą (jeśli masz na PC13)
-	  HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+	  	  // 6. Oblicz Sumę Kontrolną (CRC)
+	  	  // Liczymy CRC z całej struktury OPRÓCZ pola crc (ostatnie 2 bajty)
+	  	  myPacket.crc = Calc_CRC((uint8_t*)&myPacket, sizeof(RadioPacket) - 2);
 
-	  HAL_Delay(1000);
+	  	  // 7. Kopiuj strukturę do bufora wysyłkowego (tx_data)
+	  	  // Musimy skopiować bajty, bo NRF wysyła tablicę uint8_t
+	  	  memcpy(tx_data, &myPacket, sizeof(RadioPacket));
 
-    /* USER CODE END WHILE */
+	  	  // 8. ZASZYFRUJ (XOR)
+	  	  // "Mieszamy" bajty w buforze tx_data przed wysłaniem
+	  	  XOR_Cipher(tx_data, sizeof(RadioPacket));
+
+	  	  // 9. Wyślij przez NRF
+	  	  // Wysyłamy dokładnie tyle bajtów, ile zajmuje struktura (czyli 10)
+	  	  nrf24_transmit(tx_data, sizeof(RadioPacket));
+
+	  	  // Mrugnij diodą dla potwierdzenia życia
+	  	  HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+
+	  	  HAL_Delay(1000);
+
+	      /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }

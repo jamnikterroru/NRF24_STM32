@@ -60,8 +60,8 @@ all: main-build
 main-build: NRF24_Rx_OLED.elf secondary-outputs
 
 # Tool invocations
-NRF24_Rx_OLED.elf NRF24_Rx_OLED.map: $(OBJS) $(USER_OBJS) C:\STM32_Projects\NRF24_Rx_OLED\STM32F103C8TX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "NRF24_Rx_OLED.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m3 -T"C:\STM32_Projects\NRF24_Rx_OLED\STM32F103C8TX_FLASH.ld" --specs=nosys.specs -Wl,-Map="NRF24_Rx_OLED.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -u _printf_float -Wl,--start-group -lc -lm -Wl,--end-group
+NRF24_Rx_OLED.elf NRF24_Rx_OLED.map: $(OBJS) $(USER_OBJS) C:\NRF24_STM32\NRF24_Rx_OLED\STM32F103C8TX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "NRF24_Rx_OLED.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m3 -T"C:\NRF24_STM32\NRF24_Rx_OLED\STM32F103C8TX_FLASH.ld" --specs=nosys.specs -Wl,-Map="NRF24_Rx_OLED.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -u _printf_float -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
