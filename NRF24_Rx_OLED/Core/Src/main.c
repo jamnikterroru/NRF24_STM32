@@ -44,7 +44,41 @@
 /* USER CODE BEGIN PV */
 
 uint8_t rx_address[5] = {0xE7, 0xE7, 0xE7, 0xE7, 0xE7};
+
+
+// CRC
+
+// KLUCZ SZYFROWANIA (Może być dowolna liczba 0-255)
+#define CRYPTO_KEY 0xA5
+
+// Struktura pakietu (musi być identyczna w Tx i Rx)
+// Rozmiar: 4 (temp) + 4 (id) + 2 (crc) = 10 bajtów
+// Zmiana: dodane __attribute__((packed))
+typedef struct __attribute__((packed)) {
+    float temperature;
+    uint32_t packet_id;
+    uint16_t crc;
+} RadioPacket;
+
+RadioPacket myPacket;
 uint8_t rx_data[32];
+
+// Prosta funkcja szyfrująca/deszyfrująca (XOR)
+void XOR_Cipher(uint8_t* data, uint16_t len) {
+    for(int i=0; i<len; i++) {
+        data[i] ^= CRYPTO_KEY;
+    }
+}
+
+// CRC
+uint16_t Calc_CRC(uint8_t* data, uint16_t len) {
+    uint16_t sum = 0;
+    for(int i=0; i<len; i++) {
+        sum += data[i];
+    }
+    return sum;
+}
+
 
 /* USER CODE END PV */
 
@@ -95,7 +129,6 @@ int main(void)
   // --- INICJALIZACJA OLED ---
     // Ekran 0.91" (128x32)
     ssd1306_Init(&hi2c1);
-
     ssd1306_Fill(Black);
     ssd1306_SetCursor(0, 0);
     ssd1306_WriteString("Oczekuje...", Font_11x18, White);
@@ -112,7 +145,7 @@ int main(void)
   nrf24_set_channel(81);
   nrf24_set_addr_width(5);
   nrf24_open_rx_pipe(1, rx_address);
-  nrf24_pipe_pld_size(1, 32);
+  nrf24_pipe_pld_size(1, sizeof(RadioPacket));
   memset(rx_data, 0, 32);
   nrf24_listen();      // Tryb nadajnika
 
@@ -122,37 +155,67 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  /* USER CODE BEGIN WHILE */
-    while (1)
+  char oled_buf[32]; // Bufor pomocniczy do tworzenia napisów (sprintf)
+
+  while (1)
     {
-  	  // Sprawdź, czy coś przyszło
-  	  if(nrf24_data_available())
-  	  {
-  		// 1. Odbierz dane
-  				  nrf24_receive(rx_data, 32);
+        // Sprawdź, czy coś przyszło
+        if(nrf24_data_available())
+        {
+            // 1. Odbierz dane (zaszyfrowana struktura)
+            nrf24_receive(rx_data, sizeof(RadioPacket));
 
-  				  // 2. Wyczyść ekran (bufor)
-  				  ssd1306_Fill(Black);
+            // 2. ODSZYFRUJ (XOR)
+            // Przywracamy dane do formy czytelnej dla procesora
+            XOR_Cipher(rx_data, sizeof(RadioPacket));
 
-  				  // 3. Wypisz nagłówek (góra ekranu)
-  				  ssd1306_SetCursor(0, 0);
-  				  // 4. Wypisz odebrane dane (dół ekranu)
-  				  ssd1306_WriteString((char*)rx_data, Font_16x26, White); // Średnia czcionka
+            // 3. Skopiuj surowe bajty do struktury, żeby mieć do nich łatwy dostęp
+            memcpy(&myPacket, rx_data, sizeof(RadioPacket));
 
-  				  // 5. Wyślij bufor na ekran
-  				  ssd1306_UpdateScreen(&hi2c1);
+            // 4. Sprawdź Sumę Kontrolną (CRC)
+            // Liczymy CRC z tego co odebraliśmy (bez ostatnich 2 bajtów, które są CRC)
+            uint16_t calculated_crc = Calc_CRC((uint8_t*)&myPacket, sizeof(RadioPacket) - 2);
 
-  				  // Mrugnięcie diodą
-  				  HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-  	  }
+            ssd1306_Fill(Black);
 
-  	  // W odbiorniku nie robimy dużych delayów w pętli,
-  	  // żeby nie przegapić pakietu (chyba że NRF ma włączone auto-ack i retries)
-  	  // Ale mały delay nie zaszkodzi.
-  	  HAL_Delay(1);
+            if (calculated_crc == myPacket.crc)
+                      {
+                          // --- DANE POPRAWNE ---
+                          if(myPacket.temperature <= -900.0f) // Sprawdzenie błędu czujnika
+                          {
+                              ssd1306_SetCursor(0, 5);
+                              ssd1306_WriteString("Sensor Error!", Font_11x18, White);
+                          }
+                          else
+                          {
+                              // Wyświetl ID pakietu
+                              sprintf(oled_buf, "Pck: %lu", myPacket.packet_id);
+                              ssd1306_SetCursor(0, 0);
+                              ssd1306_WriteString(oled_buf, Font_7x10, White);
 
+                              // Wyświetl Temperaturę
+                              sprintf(oled_buf, "%.2f C", myPacket.temperature);
+                              ssd1306_SetCursor(0, 12);
+                              ssd1306_WriteString(oled_buf, Font_11x18, White);
+                          }
+                          HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+                      }
+                      else
+                      {
+                          // --- BŁĄD CRC ---
+                          ssd1306_SetCursor(0, 0);
+                          ssd1306_WriteString("SEC ERROR", Font_7x10, White);
+
+                          ssd1306_SetCursor(0, 12);
+                          ssd1306_WriteString("Bad Key/CRC", Font_11x18, White);
+                      }
+
+                      // 5. Wyślij na ekran (tylko tutaj!)
+                      ssd1306_UpdateScreen(&hi2c1);
+                  }
+
+                  HAL_Delay(1);
       /* USER CODE END WHILE */
-
       /* USER CODE BEGIN 3 */
     }
   /* USER CODE END 3 */

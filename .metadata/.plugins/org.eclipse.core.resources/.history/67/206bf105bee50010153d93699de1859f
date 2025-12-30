@@ -1,0 +1,225 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body - LIBRARY VERSION (TIMER BASED)
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "spi.h"
+#include "tim.h"
+#include "gpio.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include <string.h>
+#include <stdio.h>
+#include "NRF24.h"
+#include "NRF24_reg_addresses.h"
+#include "ds18b20.h" // Nowa biblioteka
+/* USER CODE END Includes */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+// Definicje pinów dla biblioteki DS18B20.
+// Biblioteka oczekuje tych nazw makr w swoim kodzie.
+#define DS18B20_GPIO_Port GPIOB
+#define DS18B20_Pin       GPIO_PIN_0
+
+/* USER CODE END PD */
+
+/* Private variables ---------------------------------------------------------*/
+/* USER CODE BEGIN PV */
+
+// Zmienne NRF24
+uint8_t tx_address[5] = {0xE7, 0xE7, 0xE7, 0xE7, 0xE7};
+
+// KLUCZ SZYFROWANIA (Może być dowolna liczba 0-255)
+#define CRYPTO_KEY 0xA5
+
+// Struktura pakietu (musi być identyczna w Tx i Rx)
+// Rozmiar: 4 (temp) + 4 (id) + 2 (crc) = 10 bajtów
+// Zmiana: dodane __attribute__((packed))
+typedef struct __attribute__((packed)) {
+    float temperature;
+    uint32_t packet_id;
+    uint16_t crc;
+} RadioPacket;
+
+RadioPacket myPacket;
+uint8_t tx_data[32];
+float temperature = 0.0f;
+
+// Prosta funkcja szyfrująca/deszyfrująca (XOR)
+void XOR_Cipher(uint8_t* data, uint16_t len) {
+    for(int i=0; i<len; i++) {
+        data[i] ^= CRYPTO_KEY;
+    }
+}
+
+// Prosta suma kontrolna (Fletcher16 lub zwykła suma)
+// Tutaj prosta suma dla czytelności
+uint16_t Calc_CRC(uint8_t* data, uint16_t len) {
+    uint16_t sum = 0;
+    for(int i=0; i<len; i++) {
+        sum += data[i];
+    }
+    return sum;
+}
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+
+/* USER CODE BEGIN 0 */
+// Tu było kiedyś DWT i bit-banging. Teraz jest czysto.
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+  /* MCU Configuration--------------------------------------------------------*/
+  HAL_Init();
+  SystemClock_Config();
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_SPI1_Init();
+
+  // WAŻNE: Inicjalizacja TIM2 jest krytyczna dla nowej biblioteki DS18B20!
+  // Upewnij się, że w CubeMX Prescaler = 71 (dla 72MHz CPU)
+  MX_TIM2_Init();
+
+  /* USER CODE BEGIN 2 */
+
+  // --- INICJALIZACJA NRF24 ---
+  csn_high();
+  ce_high();
+  HAL_Delay(100);
+
+  nrf24_init();
+  nrf24_tx_pwr(3);          // Max moc
+  nrf24_data_rate(0);       // 1Mbps
+  nrf24_set_channel(81);
+  nrf24_set_addr_width(5);
+  nrf24_open_tx_pipe(tx_address);
+  nrf24_stop_listen();      // Tryb nadajnika
+
+  // --- INICJALIZACJA DS18B20 ---
+  // Biblioteka sama uruchomi Timer 2 i przeskanuje magistralę
+  DS18B20_Init(DS18B20_Resolution_12bits);
+
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  uint32_t pck_counter = 0; // Licznik wysłanych pakietów
+
+  while (1)
+  {
+	  // 1. Rozpocznij konwersję na wszystkich czujnikach
+	  	  DS18B20_StartAll();
+
+	  	  // 2. Czekaj na konwersję (dla 12bit to max 750ms)
+	  	  HAL_Delay(1000);
+
+	  	  // 3. Odczytaj dane
+	  	  DS18B20_ReadAll();
+
+	  	  // 4. Przygotuj dane do wysyłki
+	  	  if(DS18B20_Quantity() > 0 && DS18B20_GetTemperature(0, &temperature))
+	  	  {
+	  		  // --- SYTUACJA OK: Mamy temperaturę ---
+	  		  myPacket.temperature = temperature;
+	  	  }
+	  	  else
+	  	  {
+	  		  // --- BŁĄD: Brak czujnika lub błąd CRC czujnika ---
+	  		  // Wpisujemy "magiczną" wartość błędu, np. -999.0
+	  		  // Odbiornik po odczytaniu -999 wyświetli "Error"
+	  		  myPacket.temperature = -999.0f;
+	  	  }
+
+	  	  // 5. Wypełnij resztę struktury
+	  	  myPacket.packet_id = pck_counter++; // Zwiększ licznik
+
+	  	  // 6. Oblicz Sumę Kontrolną (CRC)
+	  	  // Liczymy CRC z całej struktury OPRÓCZ pola crc (ostatnie 2 bajty)
+	  	  myPacket.crc = Calc_CRC((uint8_t*)&myPacket, sizeof(RadioPacket) - 2);
+
+	  	  // 7. Kopiuj strukturę do bufora wysyłkowego (tx_data)
+	  	  // Musimy skopiować bajty, bo NRF wysyła tablicę uint8_t
+	  	  memcpy(tx_data, &myPacket, sizeof(RadioPacket));
+
+	  	  // 8. ZASZYFRUJ (XOR)
+	  	  // "Mieszamy" bajty w buforze tx_data przed wysłaniem
+	  	  XOR_Cipher(tx_data, sizeof(RadioPacket));
+
+	  	  // 9. Wyślij przez NRF
+	  	  // Wysyłamy dokładnie tyle bajtów, ile zajmuje struktura (czyli 10)
+	  	  nrf24_transmit(tx_data, sizeof(RadioPacket));
+
+	  	  // Mrugnij diodą dla potwierdzenia życia
+	  	  HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+
+	  	  HAL_Delay(1000);
+
+	      /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+  }
+  /* USER CODE END 3 */
+}
+
+/* USER CODE BEGIN 4 */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+void Error_Handler(void)
+{
+  __disable_irq();
+  while (1)
+  {
+  }
+}
+/* USER CODE END 4 */
